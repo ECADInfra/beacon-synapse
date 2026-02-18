@@ -1,6 +1,12 @@
 server_name: "${SERVER_NAME}"
 pid_file: /data/homeserver.pid
 
+# Public base URL for federation and .well-known delegation
+# This tells other servers to connect on port 443 instead of 8448
+# Set via PUBLIC_BASEURL env var (defaults to https://SERVER_NAME if not set)
+# When SERVE_WELLKNOWN=true, entrypoint adds serve_server_wellknown: true
+public_baseurl: "${PUBLIC_BASEURL}"
+
 ## Federation ##
 # federation_domain_whitelist:
 #   - matrix.papers.tech
@@ -52,8 +58,8 @@ database:
     password: ${DB_PASS}
     database: ${DB_NAME}
     host: ${DB_HOST}
-    cp_min: 20
-    cp_max: 80
+    cp_min: ${DB_CP_MIN}
+    cp_max: ${DB_CP_MAX}
 
 log_config: "/config/synapse.log.config"
 

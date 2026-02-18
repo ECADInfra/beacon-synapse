@@ -38,8 +38,15 @@ else
   echo "Metrics disabled (set SYNAPSE_ENABLE_METRICS=1 to enable)"
 fi
 
+# Set defaults for optional configuration variables
+# PUBLIC_BASEURL: Federation and .well-known delegation (defaults to https://SERVER_NAME)
+export PUBLIC_BASEURL="${PUBLIC_BASEURL:-https://$SERVER_NAME}"
+# DB_CP_MIN/MAX: Database connection pool size (defaults match previous hardcoded values)
+export DB_CP_MIN="${DB_CP_MIN:-20}"
+export DB_CP_MAX="${DB_CP_MAX:-80}"
+
 # Perform variable substitution unless --skip-templating is set
-ENVSUBST_VARS='${SERVER_NAME} ${DB_HOST} ${DB_USER} ${DB_PASS} ${DB_NAME} ${REGISTRATION_SHARED_SECRET} ${METRICS_BIND_ADDRESS}'
+ENVSUBST_VARS='${SERVER_NAME} ${DB_HOST} ${DB_USER} ${DB_PASS} ${DB_NAME} ${REGISTRATION_SHARED_SECRET} ${METRICS_BIND_ADDRESS} ${PUBLIC_BASEURL} ${DB_CP_MIN} ${DB_CP_MAX}'
 
 if [ "$SKIP_TEMPLATING" = "false" ]; then
   echo "Performing template variable substitution..."
@@ -56,6 +63,19 @@ if [ "$SKIP_TEMPLATING" = "false" ]; then
       [ -f "$tmpl" ] || continue
       envsubst '${METRICS_BIND_ADDRESS}' < "$tmpl" > "/config/workers/$(basename "$tmpl")"
     done
+  fi
+
+  # Implement SERVE_WELLKNOWN functionality for Cloudflare-proxied servers
+  # When SERVE_WELLKNOWN=true, configure Synapse to serve .well-known/matrix/server
+  # This enables federation on port 443 instead of 8448 (required for Cloudflare)
+  if [ "${SERVE_WELLKNOWN:-false}" = "true" ]; then
+    echo "Enabling .well-known/matrix/server endpoint (SERVE_WELLKNOWN=true)"
+    # Add serve_server_wellknown setting if not already present
+    if ! grep -q "^serve_server_wellknown:" "$CONFIG_FILE"; then
+      echo "" >> "$CONFIG_FILE"
+      echo "# Auto-configured by entrypoint based on SERVE_WELLKNOWN env var" >> "$CONFIG_FILE"
+      echo "serve_server_wellknown: true" >> "$CONFIG_FILE"
+    fi
   fi
 else
   echo "Skipping template variable substitution (--skip-templating)"
