@@ -1,0 +1,58 @@
+# Example docker-compose for running a Beacon relay node locally.
+#
+# Prerequisites:
+#   - PostgreSQL with a database created:
+#     createdb -E UTF8 --locale=C --template=template0 synapse
+#
+# Usage:
+#   docker compose -f docker-compose.example.yml up --build
+#
+# Generate a signing key (one-time):
+#   python3 -c "import signedjson.key; import sys; signedjson.key.write_signing_keys(sys.stdout, [signedjson.key.generate_signing_key('0')])"
+
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: synapse
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: synapse
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  synapse:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8008:8008"
+    environment:
+      SERVER_NAME: localhost
+      DB_HOST: postgres
+      DB_USER: synapse
+      DB_PASS: synapse
+      DB_NAME: synapse
+      # Generate a real key for production. This is a throwaway dev key.
+      SIGNING_KEY: "ed25519 a_dev0 vyMX5LnSVj7AhpUf9dPvJBYG8OEcdyAtHWTSYEEFktY"
+      REGISTRATION_SHARED_SECRET: "change-me-in-production"
+      SERVER_REGION: local
+
+volumes:
+  postgres_data:

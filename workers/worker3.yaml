@@ -1,0 +1,14 @@
+worker_app: synapse.app.generic_worker
+worker_name: worker3
+
+worker_listeners:
+ - type: http
+   port: 8085
+   x_forwarded: true
+   resources:
+     - names: [client, federation]
+ - type: metrics
+   port: 19093
+   bind_addresses: ['${METRICS_BIND_ADDRESS}']
+
+worker_pid_file: /config/worker3.pid

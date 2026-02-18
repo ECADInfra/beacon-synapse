@@ -1,0 +1,176 @@
+server_name: "${SERVER_NAME}"
+pid_file: /data/homeserver.pid
+
+## Federation ##
+# federation_domain_whitelist:
+#   - matrix.papers.tech
+#   - beacon.tztip.me
+
+federation_ip_range_blacklist:
+  - '127.0.0.0/8'
+  - '10.0.0.0/8'
+  - '172.16.0.0/12'
+  - '192.168.0.0/16'
+  - '100.64.0.0/10'
+  - '169.254.0.0/16'
+  - '::1/128'
+  - 'fe80::/64'
+  - 'fc00::/7'
+
+## Listening Ports ##
+listeners:
+  - port: 8008
+    type: http
+    tls: false # see https://github.com/matrix-org/synapse/issues/5872
+    x_forwarded: true
+    resources:
+      - names: [client, federation]
+  # The HTTP replication port
+  - port: 9093
+    bind_address: '127.0.0.1'
+    type: http
+    resources:
+     - names: [replication]
+  # Metrics endpoint for Prometheus (port 19090)
+  - port: 19090
+    type: metrics
+    bind_addresses: ['${METRICS_BIND_ADDRESS}']
+
+# https://github.com/matrix-org/synapse/blob/master/docs/message_retention_policies.md
+# https://github.com/matrix-org/synapse/blob/v1.36.0/docs/sample_config.yaml#L451-L518
+retention:
+  enabled: true
+  default_policy:
+     max_lifetime: 1d
+  allowed_lifetime_max: 1d
+
+## Database ##
+database:
+  name: psycopg2
+  args:
+    user: ${DB_USER}
+    password: ${DB_PASS}
+    database: ${DB_NAME}
+    host: ${DB_HOST}
+    cp_min: 20
+    cp_max: 80
+
+log_config: "/config/synapse.log.config"
+
+## Ratelimiting
+rc_message:
+  per_second: 100
+  burst_count: 1000
+
+rc_login:
+  address:
+    per_second: 1
+    burst_count: 10
+  account:
+    per_second: 1
+    burst_count: 10
+  failed_attempts:
+    per_second: 1
+    burst_count: 10
+
+rc_federation:
+  window_size: 1000
+  sleep_limit: 50
+  sleep_delay: 250
+  reject_limit: 50
+  concurrent: 10
+
+bcrypt_rounds: 12
+
+report_stats: false
+enable_metrics: true
+
+signing_key_path: "/config/signing.key"
+
+trusted_key_servers: []
+
+password_config:
+  enabled: false
+
+password_providers:
+    - module: "crypto_auth_provider.CryptoAuthProvider"
+      config:
+        enabled: true
+
+# Pure p2p communication transport layer: no search, profiles, media, or registration
+enable_group_creation: false
+enable_room_list_search: false
+enable_registration_captcha: false
+allow_guest_access: false
+enable_registration: false
+use_presence: false
+require_auth_for_profile_requests: true
+allow_public_rooms_without_auth: false
+allow_public_rooms_over_federation: true
+enable_search: false
+allow_per_room_profiles: false
+redaction_retention_period: 1d
+user_ips_max_age: 1d
+
+# No media support needed for Beacon relay
+enable_media_repo: false
+max_upload_size: "0"
+max_image_pixels: "0"
+dynamic_thumbnails: false
+url_preview_enabled: false
+
+redis:
+  enabled: true
+  host: redis
+
+## Caching - Performance optimizations
+caches:
+  global_factor: 2.0
+  per_cache_factors:
+    get_users_in_room: 5.0
+    get_room_summary: 5.0
+    get_event: 3.0
+event_cache_size: 100K
+
+registration_shared_secret: "${REGISTRATION_SHARED_SECRET}"
+
+modules:
+  - module: beacon_info_module.BeaconInfoModule
+    config:
+      known_servers:
+        - "beacon-node-1.diamond.papers.tech"
+        - "beacon-node-1.sky.papers.tech"
+        - "beacon-node-2.sky.papers.tech"
+        - "beacon-node-1.hope.papers.tech"
+        - "beacon-node-1.hope-2.papers.tech"
+        - "beacon-node-1.hope-3.papers.tech"
+        - "beacon-node-1.hope-4.papers.tech"
+        - "beacon-node-1.hope-5.papers.tech"
+        - "beacon-node-1.beacon-server-1.papers.tech"
+        - "beacon-node-1.beacon-server-2.papers.tech"
+        - "beacon-node-1.beacon-server-3.papers.tech"
+        - "beacon-node-1.beacon-server-4.papers.tech"
+  - module: beacon_monitor_module.BeaconMonitorModule
+    config: {}
+
+instance_map:
+  main:
+    host: localhost
+    port: 9093
+    tls: false
+  worker1:
+    host: localhost
+    port: 8083
+    tls: false
+  worker2:
+    host: localhost
+    port: 8084
+    tls: false
+  worker3:
+    host: localhost
+    port: 8085
+    tls: false
+  worker4:
+    host: localhost
+    port: 8086
+    tls: false

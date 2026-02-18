@@ -1,0 +1,15 @@
+beacon-synapse
+© 2026 ECAD Infra Inc.
+
+This software is based on Synapse, a Matrix homeserver.
+Copyright 2014-2024 The Matrix.org Foundation C.I.C.
+Copyright 2024-2026 Element HQ (New Vector Ltd)
+https://github.com/element-hq/synapse
+
+The Ed25519 authentication provider (crypto_auth_provider.py) is derived
+from work originally created by Papers GmbH (AirGap) as part of the
+Beacon SDK ecosystem for the Tezos blockchain.
+https://github.com/airgap-it/beacon-node
+
+Synapse is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+See LICENSE for the full license text.
