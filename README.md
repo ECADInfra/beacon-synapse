@@ -52,6 +52,10 @@ The image uses template variables in `homeserver.yaml` that are substituted at s
 | `SERVER_REGION` | No | Region label for the `/beacon/info` endpoint |
 | `SYNAPSE_ENABLE_METRICS` | No | Set to `1` to expose Prometheus metrics on port 19090 |
 | `SYNAPSE_WORKERS` | No | Set to `true` to enable multi-worker mode |
+| `PUBLIC_BASEURL` | No | Public URL for federation (default: `https://SERVER_NAME`) |
+| `SERVE_WELLKNOWN` | No | Set to `true` to serve `.well-known/matrix/server` for Cloudflare |
+| `DB_CP_MIN` | No | Minimum database connections (default: `20`) |
+| `DB_CP_MAX` | No | Maximum database connections (default: `80`) |
 
 ### Entrypoint options
 
@@ -73,6 +77,27 @@ docker run ghcr.io/ecadinfra/beacon-synapse --skip-templating
 | 8008 | HTTP (client + federation) |
 | 19090 | Prometheus metrics (main process, when enabled) |
 | 19091-19094 | Prometheus metrics (workers 1-4, when enabled) |
+
+### Federation behind Cloudflare
+
+If your server is behind Cloudflare (or any proxy that doesn't support port 8448), enable `.well-known` delegation:
+
+```yaml
+environment:
+  PUBLIC_BASEURL: "https://beacon-1.example.com"
+  SERVE_WELLKNOWN: "true"
+```
+
+This configures Synapse to:
+1. Serve `/.well-known/matrix/server` with delegation to port 443
+2. Set `public_baseurl` for proper federation discovery
+
+Other Matrix servers will then connect on port 443 instead of 8448. Ensure your reverse proxy routes:
+- `/.well-known/matrix/server` → Synapse (port 8008)
+- `/_matrix/federation/*` → Synapse (port 8008)
+- `/_matrix/client/*` → Synapse (port 8008)
+
+**Important**: Configure Cloudflare to not challenge `/_matrix/federation/*` paths (these are server-to-server requests, not browsers).
 
 ## Authentication protocol
 
