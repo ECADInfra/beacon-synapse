@@ -150,6 +150,10 @@ modules:
         - "beacon-node-1.beacon-server-2.papers.tech"
         - "beacon-node-1.beacon-server-3.papers.tech"
         - "beacon-node-1.beacon-server-4.papers.tech"
+        - "beacon-1.ecadinfra.com"
+        - "beacon-2.ecadinfra.com"
+        - "beacon-3.ecadinfra.com"
+        - "beacon-4.ecadinfra.com"
   - module: beacon_monitor_module.BeaconMonitorModule
     config: {}
 
