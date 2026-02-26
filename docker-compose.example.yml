@@ -1,58 +1,151 @@
-# Example docker-compose for running a Beacon relay node locally.
-#
-# Prerequisites:
-#   - PostgreSQL with a database created:
-#     createdb -E UTF8 --locale=C --template=template0 synapse
+# Example docker-compose for beacon-synapse
+# Demonstrates both single-process and multi-worker modes.
 #
 # Usage:
-#   docker compose -f docker-compose.example.yml up --build
-#
-# Generate a signing key (one-time):
-#   python3 -c "import signedjson.key; import sys; signedjson.key.write_signing_keys(sys.stdout, [signedjson.key.generate_signing_key('0')])"
+#   Single process:  docker compose --profile single up
+#   Worker mode:     docker compose --profile workers up
+#   With metrics:    docker compose --profile workers --profile monitoring up
 
 services:
-  redis:
-    image: redis:7-alpine
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
+  # PostgreSQL database (required for all modes)
   postgres:
     image: postgres:16-alpine
+    container_name: beacon-postgres
     environment:
       POSTGRES_DB: synapse
       POSTGRES_USER: synapse
-      POSTGRES_PASSWORD: synapse
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      POSTGRES_PASSWORD: secret_password_change_me
+      # Synapse requires C collation for correct sorting
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U synapse"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 5
+    networks:
+      - beacon-net
 
-  synapse:
-    build: .
+  # Beacon Node - Single Process Mode (default, simpler)
+  beacon-node-single:
+    image: ghcr.io/ecadinfra/beacon-synapse:latest
+    container_name: beacon-single
     depends_on:
-      redis:
-        condition: service_healthy
       postgres:
         condition: service_healthy
-    ports:
-      - "8008:8008"
     environment:
-      SERVER_NAME: localhost
+      # Required
+      SERVER_NAME: "beacon.example.com"
       DB_HOST: postgres
       DB_USER: synapse
-      DB_PASS: synapse
+      DB_PASS: secret_password_change_me
       DB_NAME: synapse
-      # Generate a real key for production. This is a throwaway dev key.
-      SIGNING_KEY: "ed25519 a_dev0 vyMX5LnSVj7AhpUf9dPvJBYG8OEcdyAtHWTSYEEFktY"
+      # Generate a real signing key: python3 -c "import signedjson.key, sys; signedjson.key.write_signing_keys(sys.stdout, [signedjson.key.generate_signing_key('0')])"
+      SIGNING_KEY: "ed25519 a_key REPLACE_WITH_REAL_KEY"
       REGISTRATION_SHARED_SECRET: "change-me-in-production"
-      SERVER_REGION: local
+
+      # Optional
+      SYNAPSE_WORKERS: "false"           # Single process (default)
+      SYNAPSE_ENABLE_METRICS: "1"        # Enable metrics
+    ports:
+      - "8008:8008"                       # Synapse HTTP
+      - "19090:19090"                     # Metrics
+    volumes:
+      - synapse_data_single:/data
+    networks:
+      - beacon-net
+    profiles:
+      - single                            # Start with: docker compose --profile single up
+
+  # Beacon Node - Multi-Worker Mode (production-ready, scalable)
+  beacon-node-workers:
+    image: ghcr.io/ecadinfra/beacon-synapse:latest
+    container_name: beacon-workers
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Required
+      SERVER_NAME: "beacon.example.com"
+      DB_HOST: postgres
+      DB_USER: synapse
+      DB_PASS: secret_password_change_me
+      DB_NAME: synapse
+      SIGNING_KEY: "ed25519 a_key REPLACE_WITH_REAL_KEY"
+      REGISTRATION_SHARED_SECRET: "change-me-in-production"
+
+      # Optional - multi-worker mode
+      SYNAPSE_WORKERS: "true"             # Enable workers (2x synchrotron, 1x event_persister, 1x federation_inbound)
+      SYNAPSE_ENABLE_METRICS: "1"         # Enable metrics
+
+      # Advanced: customize worker types (optional)
+      # SYNAPSE_WORKER_TYPES: "synchrotron:4,event_persister:2,federation_sender:1"
+    ports:
+      - "8080:8080"                       # nginx load balancer (main traffic)
+      - "8008:8008"                       # Direct main process access
+      - "19090:19090"                     # Main process metrics
+      - "19091:19091"                     # Worker 1 metrics
+      - "19092:19092"                     # Worker 2 metrics
+      - "19093:19093"                     # Worker 3 metrics
+      - "19094:19094"                     # Worker 4 metrics (if 4+ workers)
+      - "9469:9469"                       # Prometheus HTTP service discovery
+    volumes:
+      - synapse_data_workers:/data
+    networks:
+      - beacon-net
+    profiles:
+      - workers                           # Start with: docker compose --profile workers up
+
+  # Optional: Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: beacon-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./prometheus.test.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - beacon-net
+    profiles:
+      - monitoring
+
+  # Optional: Grafana for visualizing metrics
+  grafana:
+    image: grafana/grafana:latest
+    container_name: beacon-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - beacon-net
+    profiles:
+      - monitoring
 
 volumes:
   postgres_data:
+    driver: local
+  synapse_data_single:
+    driver: local
+  synapse_data_workers:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  beacon-net:
+    driver: bridge
