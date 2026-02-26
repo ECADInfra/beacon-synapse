@@ -1,7 +1,4 @@
 #!/bin/sh
-# SPDX-License-Identifier: AGPL-3.0-only
-# © ECAD Infra Inc.
-set -eu
 
 # Parse command-line arguments
 CONFIG_FILE="/config/homeserver.yaml"
@@ -31,64 +28,33 @@ echo "Using config file: $CONFIG_FILE"
 # SYNAPSE_ENABLE_METRICS=1 enables metrics listener (port 19090 for main, 19091+ for workers)
 # Defaults to 0 (disabled) to match official Synapse Docker behavior
 if [ "${SYNAPSE_ENABLE_METRICS:-0}" = "1" ]; then
-  export METRICS_BIND_ADDRESS="0.0.0.0"
+  METRICS_BIND_ADDRESS="0.0.0.0"
   echo "Metrics enabled on 0.0.0.0:19090 (main), 19091+ (workers)"
 else
-  export METRICS_BIND_ADDRESS="127.0.0.1"
+  METRICS_BIND_ADDRESS="127.0.0.1"
   echo "Metrics disabled (set SYNAPSE_ENABLE_METRICS=1 to enable)"
 fi
 
-# Set defaults for optional configuration variables
-# PUBLIC_BASEURL: Federation and .well-known delegation (defaults to https://SERVER_NAME)
-export PUBLIC_BASEURL="${PUBLIC_BASEURL:-https://$SERVER_NAME}"
-# DB_CP_MIN/MAX: Database connection pool size (defaults match previous hardcoded values)
-export DB_CP_MIN="${DB_CP_MIN:-20}"
-export DB_CP_MAX="${DB_CP_MAX:-80}"
-
 # Perform variable substitution unless --skip-templating is set
-ENVSUBST_VARS='${SERVER_NAME} ${DB_HOST} ${DB_USER} ${DB_PASS} ${DB_NAME} ${REGISTRATION_SHARED_SECRET} ${METRICS_BIND_ADDRESS} ${PUBLIC_BASEURL} ${DB_CP_MIN} ${DB_CP_MAX}'
-
 if [ "$SKIP_TEMPLATING" = "false" ]; then
   echo "Performing template variable substitution..."
-  envsubst "$ENVSUBST_VARS" < "${CONFIG_FILE}.template" > "$CONFIG_FILE"
+  sed -i "s/{{SERVER_NAME}}/$SERVER_NAME/g" "$CONFIG_FILE"
+  sed -i "s/{{DB_HOST}}/$DB_HOST/g" "$CONFIG_FILE"
+  sed -i "s/{{DB_USER}}/$DB_USER/g" "$CONFIG_FILE"
+  sed -i "s/{{DB_PASS}}/$DB_PASS/g" "$CONFIG_FILE"
+  sed -i "s/{{DB_NAME}}/$DB_NAME/g" "$CONFIG_FILE"
+  sed -i "s/{{METRICS_BIND_ADDRESS}}/$METRICS_BIND_ADDRESS/g" "$CONFIG_FILE"
 
-  if [ -f /config/shared_config.yaml.template ]; then
-    envsubst '${SERVER_NAME}' < /config/shared_config.yaml.template > /config/shared_config.yaml
-  fi
-
-  # Process worker config templates
-  if [ -d /config/workers.template ]; then
-    mkdir -p /config/workers
-    for tmpl in /config/workers.template/*.yaml; do
-      [ -f "$tmpl" ] || continue
-      envsubst '${METRICS_BIND_ADDRESS}' < "$tmpl" > "/config/workers/$(basename "$tmpl")"
-    done
-  fi
-
-  # Implement SERVE_WELLKNOWN functionality for Cloudflare-proxied servers
-  # When SERVE_WELLKNOWN=true, configure Synapse to serve .well-known/matrix/server
-  # This enables federation on port 443 instead of 8448 (required for Cloudflare)
-  if [ "${SERVE_WELLKNOWN:-false}" = "true" ]; then
-    echo "Enabling .well-known/matrix/server endpoint (SERVE_WELLKNOWN=true)"
-    # Add serve_server_wellknown setting if not already present
-    if ! grep -q "^serve_server_wellknown:" "$CONFIG_FILE"; then
-      echo "" >> "$CONFIG_FILE"
-      echo "# Auto-configured by entrypoint based on SERVE_WELLKNOWN env var" >> "$CONFIG_FILE"
-      echo "serve_server_wellknown: true" >> "$CONFIG_FILE"
-    fi
+  # Also process shared_config.yaml if it exists
+  if [ -f /config/shared_config.yaml ]; then
+    sed -i "s/{{SERVER_NAME}}/$SERVER_NAME/g" /config/shared_config.yaml
   fi
 else
   echo "Skipping template variable substitution (--skip-templating)"
-  # When skipping, ensure config files exist (copy templates as-is)
-  [ ! -f "$CONFIG_FILE" ] && cp "${CONFIG_FILE}.template" "$CONFIG_FILE"
-  [ ! -f /config/shared_config.yaml ] && [ -f /config/shared_config.yaml.template ] && \
-    cp /config/shared_config.yaml.template /config/shared_config.yaml
-  [ ! -d /config/workers ] && [ -d /config/workers.template ] && \
-    cp -r /config/workers.template /config/workers
 fi
 
-(umask 077; echo "${SIGNING_KEY}" > /config/signing.key)
-/usr/local/bin/wait-for.sh -t 30 "$DB_HOST:5432"
+echo "${SIGNING_KEY}" > /config/signing.key
+/usr/local/bin/wait-for.sh "$DB_HOST:5432"
 
 # Start Synapse based on SYNAPSE_WORKERS mode (default: single-process)
 SYNAPSE_WORKERS="${SYNAPSE_WORKERS:-false}"
@@ -96,6 +62,8 @@ SYNAPSE_WORKERS="${SYNAPSE_WORKERS:-false}"
 if [ "$SYNAPSE_WORKERS" = "true" ]; then
   echo "Starting Synapse in multi-worker mode with config: $CONFIG_FILE"
   echo "Note: Multi-worker mode requires a load balancer for createRoom routing"
+  # Multi-worker mode - each worker exposes metrics on 9001, 9002, 9003, 9004
+  # Main process exposes metrics on 9000
   synctl start "$CONFIG_FILE" -w /config/workers/main_process.yaml
   synctl start "$CONFIG_FILE" -w /config/workers/worker1.yaml
   synctl start "$CONFIG_FILE" -w /config/workers/worker2.yaml
@@ -105,3 +73,10 @@ else
   echo "Starting Synapse in single-process mode with config: $CONFIG_FILE"
   synctl start "$CONFIG_FILE" --no-daemonize
 fi
+
+# Alternative: systemd-based worker management (commented out)
+# systemctl daemon-reload
+# systemctl start matrix-synapse.service
+# systemctl enable matrix-synapse-worker@worker1.service
+# systemctl enable matrix-synapse-worker@worker2.service
+# systemctl start matrix-synapse.target.service

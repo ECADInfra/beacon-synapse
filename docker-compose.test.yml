@@ -1,0 +1,170 @@
+# Test configuration for beacon-node with Synapse v1.147.1
+# This demonstrates both single-process and multi-worker modes
+
+services:
+  # PostgreSQL database (required for all modes)
+  postgres:
+    image: postgres:16-alpine
+    container_name: beacon-postgres
+    environment:
+      POSTGRES_DB: synapse
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: secret_password_change_me
+      # Synapse requires C collation for correct sorting
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - beacon-net
+
+  # Beacon Node - Single Process Mode (default, simpler)
+  beacon-node-single:
+    image: beacon-node-test:latest  # Use ghcr.io/ecadinfra/deacon/beacon-node:latest in production
+    container_name: beacon-single
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Required
+      SERVER_NAME: "beacon.local.test"
+      DB_HOST: postgres
+      DB_USER: synapse
+      DB_PASS: secret_password_change_me
+      DB_NAME: synapse
+      SIGNING_KEY: "ed25519 a_test gU+p5Z8K7wGfHD3nLwJQFQzG7XqZd8hP3kR2sT4vX8w="
+
+      # Optional - single process mode
+      SYNAPSE_WORKERS: "false"           # Single process (default)
+      SYNAPSE_ENABLE_METRICS: "1"        # Enable metrics
+    ports:
+      - "8008:8008"                       # Synapse HTTP
+      - "19090:19090"                     # Metrics
+    volumes:
+      - synapse_data_single:/data
+    networks:
+      - beacon-net
+    profiles:
+      - single                            # Start with: docker-compose --profile single up
+
+  # Beacon Node - Multi-Worker Mode (production-ready, scalable)
+  beacon-node-workers:
+    image: beacon-node-test:latest  # Use ghcr.io/ecadinfra/deacon/beacon-node:latest in production
+    container_name: beacon-workers
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Required
+      SERVER_NAME: "beacon.local.test"
+      DB_HOST: postgres
+      DB_USER: synapse
+      DB_PASS: secret_password_change_me
+      DB_NAME: synapse
+      SIGNING_KEY: "ed25519 a_test gU+p5Z8K7wGfHD3nLwJQFQzG7XqZd8hP3kR2sT4vX8w="
+
+      # Optional - multi-worker mode
+      SYNAPSE_WORKERS: "true"             # Enable workers (2x synchrotron, 1x event_persister, 1x federation_inbound)
+      SYNAPSE_ENABLE_METRICS: "1"         # Enable metrics
+
+      # Advanced: customize worker types (optional)
+      # SYNAPSE_WORKER_TYPES: "synchrotron:4,event_persister:2,federation_sender:1"
+    ports:
+      - "8080:8080"                       # nginx load balancer (main traffic)
+      - "8008:8008"                       # Direct main process access
+      - "19090:19090"                     # Main process metrics
+      - "19091:19091"                     # Worker 1 metrics
+      - "19092:19092"                     # Worker 2 metrics
+      - "19093:19093"                     # Worker 3 metrics
+      - "19094:19094"                     # Worker 4 metrics (if 4+ workers)
+      - "9469:9469"                       # Prometheus HTTP service discovery
+    volumes:
+      - synapse_data_workers:/data
+    networks:
+      - beacon-net
+    profiles:
+      - workers                           # Start with: docker-compose --profile workers up
+
+  # Optional: Prometheus for testing metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: beacon-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./prometheus.test.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - beacon-net
+    profiles:
+      - monitoring
+
+  # Optional: Grafana for visualizing metrics
+  grafana:
+    image: grafana/grafana:latest
+    container_name: beacon-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - beacon-net
+    profiles:
+      - monitoring
+
+volumes:
+  postgres_data:
+    driver: local
+  synapse_data_single:
+    driver: local
+  synapse_data_workers:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  beacon-net:
+    driver: bridge
+
+# Usage Examples:
+#
+# 1. Test single-process mode:
+#    docker-compose -f docker-compose.test.yml --profile single up
+#
+# 2. Test multi-worker mode:
+#    docker-compose -f docker-compose.test.yml --profile workers up
+#
+# 3. Test with monitoring (Prometheus + Grafana):
+#    docker-compose -f docker-compose.test.yml --profile workers --profile monitoring up
+#
+# 4. Check logs:
+#    docker logs -f beacon-single   # or beacon-workers
+#
+# 5. Access services:
+#    - Synapse (single): http://localhost:8008
+#    - Synapse (workers): http://localhost:8080
+#    - Metrics: http://localhost:19090/metrics
+#    - Prometheus: http://localhost:9090
+#    - Grafana: http://localhost:3000 (admin/admin)
+#
+# 6. Test health:
+#    curl http://localhost:8008/health
+#
+# 7. Clean up:
+#    docker-compose -f docker-compose.test.yml down -v

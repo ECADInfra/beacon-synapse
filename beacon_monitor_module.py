@@ -1,6 +1,3 @@
-# SPDX-License-Identifier: AGPL-3.0-only
-# © ECAD Infra Inc.
-#
 # Beacon activity monitor module for Synapse.
 #
 # Hooks into Synapse's module API to log room activity, membership changes,

@@ -1,0 +1,40 @@
+# Prometheus configuration for testing beacon-node metrics
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Single-process mode - scrape main process only
+  - job_name: 'beacon-single'
+    static_configs:
+      - targets: ['beacon-single:19090']
+    metrics_path: '/metrics'
+
+  # Multi-worker mode - Option 1: HTTP Service Discovery (recommended)
+  - job_name: 'beacon-workers-sd'
+    http_sd_configs:
+      - url: http://beacon-workers:9469/metrics/service_discovery
+        refresh_interval: 30s
+    metrics_path: '/metrics'
+    relabel_configs:
+      # Use the __metrics_path__ label from service discovery
+      - source_labels: [__metrics_path__]
+        target_label: __metrics_path__
+
+  # Multi-worker mode - Option 2: Static scraping (all ports)
+  - job_name: 'beacon-workers-main'
+    static_configs:
+      - targets: ['beacon-workers:19090']
+        labels:
+          worker: 'main'
+
+  - job_name: 'beacon-workers-workers'
+    static_configs:
+      - targets:
+        - 'beacon-workers:19091'
+        - 'beacon-workers:19092'
+        - 'beacon-workers:19093'
+        - 'beacon-workers:19094'
+        labels:
+          worker_type: 'generic'

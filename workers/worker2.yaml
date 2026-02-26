@@ -7,8 +7,5 @@ worker_listeners:
    x_forwarded: true
    resources:
      - names: [client, federation]
- - type: metrics
-   port: 19092
-   bind_addresses: ['${METRICS_BIND_ADDRESS}']
 
 worker_pid_file: /config/worker2.pid
