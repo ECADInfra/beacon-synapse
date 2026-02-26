@@ -2,16 +2,6 @@
 
 Production-ready [Matrix](https://matrix.org/) homeserver image for operating [Beacon](https://tzip.tezosagora.org/proposal/tzip-10/) relay nodes. Beacon is the open communication standard connecting Tezos wallets and dApps, ratified as [TZIP-10](https://tzip.tezosagora.org/proposal/tzip-10/). Matrix provides the federated transport layer.
 
-This image is what [ECAD Infra](https://ecadinfra.com) runs in production. We publish it so that anyone can operate Beacon relay infrastructure using the same tooling we do.
-
-## Why operator diversity matters
-
-Beacon relay nodes are the infrastructure that every Tezos wallet-to-dApp connection depends on. When a user pairs a wallet with a dApp, that connection flows through Matrix relay servers.
-
-The Beacon network is stronger when relay infrastructure is operated by **multiple independent organizations** across different regions and hosting providers. Federation is a core design property of the Matrix protocol, and Beacon inherits it: wallets and dApps can communicate regardless of which operator's relay node they connect through. No single organization needs to be a bottleneck or a single point of failure.
-
-This image exists to make running a Beacon relay node straightforward. If you operate infrastructure in the Tezos ecosystem, consider running one.
-
 ## Provenance
 
 Beacon relay infrastructure was originally created by [Papers (AirGap)](https://papers.ch/) as part of the [Beacon SDK](https://github.com/airgap-it/beacon-sdk) ecosystem. Papers designed the protocol, built the SDK, and operated the first relay nodes, establishing the standard that the entire Tezos wallet and dApp ecosystem relies on today.
@@ -21,20 +11,51 @@ This image builds on [AirGap's beacon-node](https://github.com/airgap-it/beacon-
 ### What changed from upstream
 
 - **Synapse v1.98.0 to v1.147.1**: Upgraded to current release
+- **`crypto_auth_provider.py` v0.3**: PyNaCl-based Ed25519 auth (no gcc/libsodium-dev build deps), structured logfmt logging, race condition handling
 - **`beacon_monitor_module.py`**: Observability module for diagnosing connection and federation issues. Logs operational metadata (room lifecycle, membership changes, payload sizes, login events) in logfmt format. All Beacon message payloads are encrypted end-to-end between wallet and dApp using NaCl cryptobox before reaching the relay server; message content is not and cannot be logged. User and room identifiers are opaque hashes with no link to real-world identity.
 - **`beacon_info_module.py`**: HTTP endpoint exposing server region and known relay servers
-- **Worker mode**: Support for 4 generic workers behind the main process
+- **Worker mode**: Official Element HQ worker orchestration (supervisord + nginx + redis) for horizontal scaling
 - **`MAX_PDU_SIZE` patch**: 64KB to 1MB (Beacon messages can exceed the default Matrix limit)
 - **logfmt logging**: Structured log output for ingestion into Loki/Grafana/etc.
+- **SSRF protection**: `federation_ip_range_blacklist` covering RFC 1918, link-local, and loopback
 - **Robust entrypoint**: Template variable substitution, database readiness check, single-process or multi-worker modes
 
 ## Quick start
 
 ```bash
+# Single-process mode (default)
 docker compose -f docker-compose.example.yml up --build
+
+# Worker mode
+SYNAPSE_WORKERS=true docker compose -f docker-compose.example.yml up --build
 ```
 
-This starts Synapse with PostgreSQL and Redis. The server will be available at `http://localhost:8008`.
+This starts Synapse with PostgreSQL. The server will be available at `http://localhost:8008`.
+
+## Architecture
+
+### Single-process mode (default)
+
+```
+Client/Federation --> :8008 [Synapse] --> PostgreSQL
+```
+
+One Synapse process handles everything. Good for development and low-traffic deployments.
+
+### Worker mode
+
+```
+Client/Federation --> :8008 [nginx] --> :8080 [Synapse main]
+                                   \-> :18009+ [workers]
+                                        - synchrotron (sync)
+                                        - event_persister (writes)
+                                        - federation_inbound (federation)
+                     :9469 [nginx] --> Prometheus service discovery
+                     [redis] <------> inter-process replication
+                     [supervisord] --> manages all processes
+```
+
+Supervisord orchestrates the main Synapse process, worker processes, nginx, and redis, all inside a single container. nginx routes requests to the appropriate worker based on URL patterns. Redis handles inter-process replication.
 
 ## Configuration
 
@@ -52,10 +73,31 @@ The image uses template variables in `homeserver.yaml` that are substituted at s
 | `SERVER_REGION` | No | Region label for the `/beacon/info` endpoint |
 | `SYNAPSE_ENABLE_METRICS` | No | Set to `1` to expose Prometheus metrics on port 19090 |
 | `SYNAPSE_WORKERS` | No | Set to `true` to enable multi-worker mode |
+| `SYNAPSE_WORKER_TYPES` | No | Comma-separated worker types (default: `synchrotron:2,event_persister:1,federation_inbound:1`) |
 | `PUBLIC_BASEURL` | No | Public URL for federation (default: `https://SERVER_NAME`) |
 | `SERVE_WELLKNOWN` | No | Set to `true` to serve `.well-known/matrix/server` for Cloudflare |
 | `DB_CP_MIN` | No | Minimum database connections (default: `20`) |
 | `DB_CP_MAX` | No | Maximum database connections (default: `80`) |
+
+### Worker types
+
+The `SYNAPSE_WORKER_TYPES` variable accepts the official Element HQ worker type syntax:
+
+```bash
+# Simple list
+SYNAPSE_WORKER_TYPES="synchrotron,event_persister,federation_inbound"
+
+# With multipliers
+SYNAPSE_WORKER_TYPES="synchrotron:2,event_persister:2,federation_inbound:1"
+
+# Combined workers (merge types into one process)
+SYNAPSE_WORKER_TYPES="stream_writers=account_data+presence+typing"
+
+# Custom names
+SYNAPSE_WORKER_TYPES="sync=synchrotron:2,persist=event_persister:1"
+```
+
+Available types: `synchrotron`, `event_persister`, `federation_inbound`, `federation_sender`, `federation_reader`, `client_reader`, `event_creator`, `media_repository`, `user_dir`, `pusher`, `appservice`, `background_worker`, `account_data`, `presence`, `receipts`, `to_device`, `typing`, `push_rules`, `device_lists`, `thread_subscriptions`.
 
 ### Entrypoint options
 
@@ -72,11 +114,30 @@ docker run ghcr.io/ecadinfra/beacon-synapse --skip-templating
 
 ### Ports
 
-| Port | Service |
-|---|---|
-| 8008 | HTTP (client + federation) |
-| 19090 | Prometheus metrics (main process, when enabled) |
-| 19091-19094 | Prometheus metrics (workers 1-4, when enabled) |
+| Port | Mode | Service |
+|---|---|---|
+| 8008 | Both | HTTP (client + federation). Direct in single mode, nginx in worker mode |
+| 8080 | Worker | Main Synapse process (internal, behind nginx) |
+| 9469 | Worker | Prometheus service discovery + metrics proxy |
+| 19090 | Both | Prometheus metrics (main process, when enabled) |
+
+### Prometheus service discovery (worker mode)
+
+When `SYNAPSE_ENABLE_METRICS=1` and worker mode is active, port 9469 serves:
+
+- `GET /metrics/service_discovery` - JSON for Prometheus `http_sd_config`
+- `GET /metrics/worker/<name>` - Proxied metrics for each worker
+- `GET /metrics/worker/main` - Proxied metrics for the main process
+
+Prometheus config:
+
+```yaml
+scrape_configs:
+  - job_name: beacon-synapse
+    http_sd_configs:
+      - url: http://synapse:9469/metrics/service_discovery
+    honor_labels: true
+```
 
 ### Federation behind Cloudflare
 
@@ -93,9 +154,9 @@ This configures Synapse to:
 2. Set `public_baseurl` for proper federation discovery
 
 Other Matrix servers will then connect on port 443 instead of 8448. Ensure your reverse proxy routes:
-- `/.well-known/matrix/server` → Synapse (port 8008)
-- `/_matrix/federation/*` → Synapse (port 8008)
-- `/_matrix/client/*` → Synapse (port 8008)
+- `/.well-known/matrix/server` -> Synapse (port 8008)
+- `/_matrix/federation/*` -> Synapse (port 8008)
+- `/_matrix/client/*` -> Synapse (port 8008)
 
 **Important**: Configure Cloudflare to not challenge `/_matrix/federation/*` paths (these are server-to-server requests, not browsers).
 
@@ -142,7 +203,7 @@ Exposes `/_synapse/client/beacon/info` returning:
 If you want to operate a Beacon relay node for the Tezos ecosystem:
 
 1. Deploy this image with the configuration above
-2. Ensure port 8443 (or your federation port) is reachable from other relay nodes
+2. Ensure port 8448 (or 443 if using `.well-known` delegation) is reachable from other relay nodes
 3. Configure federation with existing operators so wallets and dApps on your node can communicate with the broader network
 4. Open an issue or reach out to coordinate federation peering
 

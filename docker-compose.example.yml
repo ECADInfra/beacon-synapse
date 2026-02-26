@@ -1,24 +1,15 @@
 # Example docker-compose for running a Beacon relay node locally.
 #
-# Prerequisites:
-#   - PostgreSQL with a database created:
-#     createdb -E UTF8 --locale=C --template=template0 synapse
-#
-# Usage:
+# Single-process mode (default):
 #   docker compose -f docker-compose.example.yml up --build
+#
+# Worker mode:
+#   SYNAPSE_WORKERS=true docker compose -f docker-compose.example.yml up --build
 #
 # Generate a signing key (one-time):
 #   python3 -c "import signedjson.key; import sys; signedjson.key.write_signing_keys(sys.stdout, [signedjson.key.generate_signing_key('0')])"
 
 services:
-  redis:
-    image: redis:7-alpine
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   postgres:
     image: postgres:16-alpine
     environment:
@@ -37,12 +28,12 @@ services:
   synapse:
     build: .
     depends_on:
-      redis:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     ports:
       - "8008:8008"
+      - "9469:9469"
+      - "19090:19090"
     environment:
       SERVER_NAME: localhost
       DB_HOST: postgres
@@ -53,6 +44,10 @@ services:
       SIGNING_KEY: "ed25519 a_dev0 vyMX5LnSVj7AhpUf9dPvJBYG8OEcdyAtHWTSYEEFktY"
       REGISTRATION_SHARED_SECRET: "change-me-in-production"
       SERVER_REGION: local
+      SYNAPSE_ENABLE_METRICS: "1"
+      # Set SYNAPSE_WORKERS=true to enable worker mode (supervisord + nginx + redis)
+      SYNAPSE_WORKERS: "${SYNAPSE_WORKERS:-false}"
+      SYNAPSE_WORKER_TYPES: "${SYNAPSE_WORKER_TYPES:-synchrotron:2,event_persister:1,federation_inbound:1}"
 
 volumes:
   postgres_data:

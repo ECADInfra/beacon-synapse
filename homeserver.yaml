@@ -24,19 +24,16 @@ federation_ip_range_blacklist:
   - 'fc00::/7'
 
 ## Listening Ports ##
+# In single-process mode: port 8008, bind 0.0.0.0
+# In worker mode: port 8080, bind 127.0.0.1 (nginx fronts on 8008)
 listeners:
-  - port: 8008
+  - port: ${SYNAPSE_HTTP_PORT}
     type: http
-    tls: false # see https://github.com/matrix-org/synapse/issues/5872
+    tls: false
+    bind_addresses: ['${SYNAPSE_HTTP_BIND}']
     x_forwarded: true
     resources:
       - names: [client, federation]
-  # The HTTP replication port
-  - port: 9093
-    bind_address: '127.0.0.1'
-    type: http
-    resources:
-     - names: [replication]
   # Metrics endpoint for Prometheus (port 19090)
   - port: 19090
     type: metrics
@@ -125,10 +122,6 @@ max_image_pixels: "0"
 dynamic_thumbnails: false
 url_preview_enabled: false
 
-redis:
-  enabled: true
-  host: redis
-
 ## Caching - Performance optimizations
 caches:
   global_factor: 2.0
@@ -162,25 +155,3 @@ modules:
         - "beacon-4.ecadinfra.com"
   - module: beacon_monitor_module.BeaconMonitorModule
     config: {}
-
-instance_map:
-  main:
-    host: localhost
-    port: 9093
-    tls: false
-  worker1:
-    host: localhost
-    port: 8083
-    tls: false
-  worker2:
-    host: localhost
-    port: 8084
-    tls: false
-  worker3:
-    host: localhost
-    port: 8085
-    tls: false
-  worker4:
-    host: localhost
-    port: 8086
-    tls: false
