@@ -24,14 +24,17 @@ import logging
 import time
 
 from twisted.internet import defer
-import pysodium
+import nacl.encoding
+import nacl.exceptions
+import nacl.hash
+import nacl.signing
 
-__version__ = "0.2"
+__version__ = "0.3"
 logger = logging.getLogger(__name__)
 
 
 class CryptoAuthProvider:
-    __version__ = "0.2"
+    __version__ = "0.3"
 
     def __init__(self, config, account_handler):
         self.account_handler = account_handler
@@ -44,7 +47,9 @@ class CryptoAuthProvider:
             public_key_hash = bytes.fromhex(user_id.split(":", 1)[0][1:])
             signature = bytes.fromhex(password.split(":")[1])
             public_key = bytes.fromhex(password.split(":")[2])
-            public_key_digest = pysodium.crypto_generichash(public_key)
+            public_key_digest = nacl.hash.blake2b(
+                public_key, digest_size=32,
+                encoder=nacl.encoding.RawEncoder)
         except (ValueError, IndexError) as exc:
             self.log.warning(
                 "event=AUTH_FAIL user=%s reason=malformed_credentials err=%s",
@@ -64,12 +69,13 @@ class CryptoAuthProvider:
         # to handle reasonable clock skew between client and server
         verified = False
         for offset, label in ((0, "current"), (-1, "previous"), (1, "next")):
-            message_digest = pysodium.crypto_generichash(
-                "login:{}".format(current_time_window + offset).encode())
+            message_digest = nacl.hash.blake2b(
+                "login:{}".format(current_time_window + offset).encode(),
+                digest_size=32, encoder=nacl.encoding.RawEncoder)
             try:
-                pysodium.crypto_sign_verify_detached(
-                    signature, message_digest, public_key)
-            except Exception:
+                nacl.signing.VerifyKey(public_key).verify(
+                    message_digest, signature)
+            except nacl.exceptions.BadSignatureError:
                 continue
             verified = True
             self.log.info("event=AUTH_OK user=%s window=%s", user_id.lower(), label)
