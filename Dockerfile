@@ -31,14 +31,10 @@ RUN mkdir -p /keys /data
 # Increase max event size (1MB instead of default 64KB).
 # Beacon messages can exceed the default Matrix PDU size limit.
 # Runs before COPY so code changes don't invalidate this layer.
-RUN python3 -c " \
-import synapse.api.constants as c; \
-path = c.__file__; \
-txt = open(path).read(); \
-assert 'MAX_PDU_SIZE = 65536' in txt, f'FATAL: MAX_PDU_SIZE = 65536 not found in {path}. Upstream may have changed.'; \
-open(path, 'w').write(txt.replace('MAX_PDU_SIZE = 65536', 'MAX_PDU_SIZE = 1048576')); \
-print(f'Patched {path}') \
-"
+RUN CONSTANTS=$(python3 -c "import importlib.util; print(importlib.util.find_spec('synapse.api.constants').origin)") && \
+    grep -q 'MAX_PDU_SIZE = 65536' "$CONSTANTS" || \
+    { echo "FATAL: MAX_PDU_SIZE = 65536 not found in $CONSTANTS. Upstream may have changed." >&2; exit 1; } && \
+    sed -i "s/MAX_PDU_SIZE = 65536/MAX_PDU_SIZE = 1048576/" "$CONSTANTS"
 
 # Copy custom modules (using Python 3.13 path for Element HQ image)
 COPY crypto_auth_provider.py /usr/local/lib/python3.13/site-packages/
