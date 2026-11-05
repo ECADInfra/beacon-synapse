@@ -1,4 +1,4 @@
-FROM ghcr.io/element-hq/synapse:v1.148.0
+FROM ghcr.io/element-hq/synapse:v1.164.2
 LABEL maintainer="ECAD Infra <ops@ecadinfra.com>"
 LABEL org.opencontainers.image.description="Synapse homeserver with Ed25519 Beacon auth for Tezos dApp/wallet relay"
 LABEL org.opencontainers.image.source="https://github.com/ECADInfra/beacon-synapse"
