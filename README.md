@@ -1,6 +1,6 @@
 # beacon-synapse
 
-Production-ready [Matrix](https://matrix.org/) homeserver image for operating [Beacon](https://tzip.tezosagora.org/proposal/tzip-10/) relay nodes. Beacon is the open communication standard connecting Tezos wallets and dApps, ratified as [TZIP-10](https://tzip.tezosagora.org/proposal/tzip-10/). Matrix provides the federated transport layer.
+[Matrix](https://matrix.org/) homeserver image for operating [Beacon](https://tzip.tezosagora.org/proposal/tzip-10/) relay nodes, maintained for testing and as a public reference implementation. ECAD no longer operates public relay nodes. Beacon is the open communication standard connecting Tezos wallets and dApps, ratified as [TZIP-10](https://tzip.tezosagora.org/proposal/tzip-10/). Matrix provides the federated transport layer.
 
 ## Provenance
 
@@ -10,8 +10,8 @@ This image builds on [AirGap's beacon-node](https://github.com/airgap-it/beacon-
 
 ### What changed from upstream
 
-- **Synapse v1.98.0 to v1.147.1**: Upgraded to current release
-- **`crypto_auth_provider.py` v0.3**: PyNaCl-based Ed25519 auth (no gcc/libsodium-dev build deps), structured logfmt logging, race condition handling
+- **Synapse v1.98.0 to v1.164.2**: Upgraded to current release
+- **`crypto_auth_provider.py` v0.4**: Synapse ModuleApi callback registration, strict Ed25519 credential parsing, structured operational logs, and concurrent first-login recovery
 - **`beacon_monitor_module.py`**: Observability module for diagnosing connection and federation issues. Logs operational metadata (room lifecycle, membership changes, payload sizes, login events) in logfmt format. All Beacon message payloads are encrypted end-to-end between wallet and dApp using NaCl cryptobox before reaching the relay server; message content is not and cannot be logged. User and room identifiers are opaque hashes with no link to real-world identity.
 - **`beacon_info_module.py`**: HTTP endpoint exposing server region and known relay servers
 - **Worker mode**: Official Element HQ worker orchestration (supervisord + nginx + redis) for horizontal scaling
@@ -30,7 +30,12 @@ docker compose -f docker-compose.example.yml up --build
 SYNAPSE_WORKERS=true docker compose -f docker-compose.example.yml up --build
 ```
 
-This starts Synapse with PostgreSQL. The server will be available at `http://localhost:8008`.
+This starts Synapse with PostgreSQL 18.6. The server will be available at `http://localhost:8008`.
+
+The PostgreSQL image stores data beneath `/var/lib/postgresql/18/docker`, with
+the volume mounted at `/var/lib/postgresql`. Existing PostgreSQL 16 data needs
+a supported dump/restore or `pg_upgrade` migration before use with this example;
+changing the image tag does not upgrade an existing database.
 
 ## Architecture
 
@@ -193,7 +198,7 @@ Exposes `/_synapse/client/beacon/info` returning:
 ```json
 {
   "region": "na-west",
-  "known_servers": ["beacon-node-1.diamond.papers.tech", "..."],
+  "known_servers": ["beacon-node-1.octez.io", "beacon-node-2.octez.io", "..."],
   "timestamp": 1708300000.0
 }
 ```
@@ -209,6 +214,26 @@ If you want to operate a Beacon relay node for the Tezos ecosystem:
 
 The more independent operators running relay infrastructure, the more resilient the network is for everyone.
 
+### Operator maintenance
+
+This repository is maintained for testing and as a public reference for relay
+operators. ECAD no longer operates public relay nodes. Listing a
+remote relay in `known_servers` enables discovery; it does not mean that ECAD
+operates that relay, maintains its software, or has validated its deployed build.
+Each operator is responsible for its own Synapse upgrades, custom modules,
+configuration, monitoring, and wallet interoperability checks.
+
+Track [Synapse releases](https://github.com/element-hq/synapse/releases) and review
+upgrade notes before deployment. A client SDK release does not update the relay
+server. Record the deployed image digest, source revision, and local patches so
+operators can reproduce a build and identify what needs updating.
+
+Before rolling out a new build, validate login, pairing, reconnects, and federation
+with the wallets and remote relays used by the deployment. Worker deployments
+also need checks against their actual PostgreSQL, Redis, and request-routing
+configuration. The unit tests in this repository cover module behavior; they do
+not certify another operator's deployment.
+
 ## Links
 
 - [TZIP-10 specification](https://tzip.tezosagora.org/proposal/tzip-10/) (the Beacon standard)
@@ -222,3 +247,95 @@ The more independent operators running relay infrastructure, the more resilient 
 This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
 
 See [NOTICE](NOTICE) for attribution of upstream works.
+
+### Source for our test environment
+
+This repository contains the code we run for Beacon relay testing, including our
+Synapse modifications, authentication modules, configuration templates, and build
+scripts. The [Dockerfile](Dockerfile) pins the upstream Synapse version and records
+the build-time patch so the image can be reproduced from source.
+
+We publish these changes here under the AGPL-3.0-only license.
+
+## ModuleApi authentication and relay limits
+
+The auth provider is loaded under `modules`, alongside the info and monitor
+modules. `password_config.enabled: true` enables the `m.login.password` protocol
+flow used for signed credentials; `localdb_enabled: false` disables local database
+password authentication. Credentials use the current, previous, or next five-minute
+bucket. Authentication succeeds after the account exists or registration completes.
+Backend failures return an authentication failure without logging exception text.
+`event=AUTH_OK` records successful module authentication, not completion of the
+whole login request. Synapse can still reject a later step, such as rate limiting
+or device creation. Use the monitor module's `event=LOGIN` for completed logins.
+
+The main process and all workers load `homeserver.yaml`; the shared worker template
+adds worker settings without replacing its module list or rate limits. Keep the
+base configuration when supplying custom worker configuration files.
+
+Public room directory queries over federation are disabled. This does not disable
+room federation or change room join rules. Invite limits are explicitly configured:
+
+| Scope | Invites per second | Burst | Compared with Synapse v1.164.2 defaults |
+|---|---:|---:|---|
+| Per room | 0.3 | 10 | Unchanged, configured explicitly |
+| Per recipient | 0.003 | 5 | Unchanged, configured explicitly |
+| Per issuer | 0.1 | 5 | Reduced from 0.3 per second, burst 10 |
+
+The issuer limit bounds an account's invites across rooms. After the initial burst
+of five, capacity replenishes at one invite every ten seconds. Before rollout,
+measure invite volume per sender using `event=MEMBERSHIP membership=invite` logs,
+and check pairing and reconnect bursts. Monitor `M_LIMIT_EXCEEDED` responses after
+deployment and tune the limits to the observed workload. Inbound federated
+invites are subject to the recipient limit; issuing servers enforce their own issuer
+and room limits. These are Synapse process-local rate limiters, not a fleet-wide quota.
+See the [Synapse rate-limit documentation](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#rc_invites).
+
+Relay discovery lists `beacon-node-{1..8}.octez.io`. Retired Papers and ECAD relay
+entries have been removed. Discovery is
+not a federation allowlist and does not prevent existing peers from federating.
+
+### Room join guard assessment
+
+A `check_event_allowed` guard could allow a membership join when the previous
+membership is `invite` or already `join`, the joining user is the room creator,
+or fewer than two members are joined. Existing joins need an exception so profile
+updates and repeated joins do not fail. Creator detection should use the create
+event sender for compatibility across room versions.
+
+Legacy room creation uses `public_chat` with an explicit peer invite, so the usual
+creator-then-invited-peer sequence fits this policy. However, it does not enforce
+a two-member maximum: additional invited users still qualify, an uninvited user
+can occupy the second slot, and concurrent joins can observe the same prior state.
+It can also deny an uninvited rejoin once two other members are present.
+
+No enforcing guard is enabled. Synapse warns that rejecting received federation
+events through this experimental callback can cause local and remote room histories
+to diverge. A local-sender-only rule would avoid rejecting remote events but would
+not enforce a network-wide room size. A coordinated relay policy needs multi-server
+validation of invites, rejoins, simultaneous joins, and state resolution before
+rollout. See [Synapse third-party rules](https://element-hq.github.io/synapse/latest/modules/third_party_rules_callbacks.html#check_event_allowed).
+
+## Development checks
+
+Run the checks with the locked development environment:
+
+```bash
+uv run --locked pytest -q
+uv run --locked ty check
+uv run --locked ruff check
+uv run --locked ruff format --check
+```
+
+Type and lint checks cover the authentication module and its tests. The development
+environment includes the same Synapse version as the Docker image so `ty` checks
+the real ModuleApi contract. Keep that version aligned when updating the image.
+The upstream worker orchestration and other modules are outside this check scope.
+
+The authentication boundary accepts `Mapping[str, object]`: values must be narrowed
+before use, and the module does not mutate the input. No `Any` or casts are needed.
+
+The suite uses real Ed25519 signatures and a narrow
+ModuleApi double to exercise validation, bucket boundaries, account registration,
+concurrent registration recovery, and credential-free operational logs. It does not
+replace container startup or federation interoperability testing.

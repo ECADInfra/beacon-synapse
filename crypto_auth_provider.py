@@ -15,91 +15,117 @@
 # Signature covers: BLAKE2b("login:<5-minute-time-window>")
 #
 # Enable in homeserver.yaml:
-#   password_providers:
+#   modules:
 #     - module: 'crypto_auth_provider.CryptoAuthProvider'
-#       config:
-#         enabled: true
+#       config: {}
 
+from __future__ import annotations
+
+import hashlib
 import logging
+import re
 import time
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
-from twisted.internet import defer
-import nacl.encoding
 import nacl.exceptions
-import nacl.hash
 import nacl.signing
 
-__version__ = "0.3"
+if TYPE_CHECKING:
+    from synapse.module_api import ModuleApi
+
+__version__ = "0.4"
 logger = logging.getLogger(__name__)
 
 
 class CryptoAuthProvider:
-    __version__ = "0.3"
+    __version__ = __version__
 
-    def __init__(self, config, account_handler):
-        self.account_handler = account_handler
-        self.config = config
-        self.log = logging.getLogger(__name__)
+    def __init__(self, config: Mapping[str, object], api: ModuleApi) -> None:
+        self.api = api
+        api.register_password_auth_provider_callbacks(
+            auth_checkers={("m.login.password", ("password",)): self.check_auth}
+        )
 
-    @defer.inlineCallbacks
-    def check_password(self, user_id: str, password: str):
+    async def check_auth(
+        self, user: str, login_type: str, login_dict: Mapping[str, object]
+    ) -> tuple[str, None] | None:
+        if login_type != "m.login.password":
+            logger.warning("event=AUTH_FAIL reason=invalid_login")
+            return None
+
+        user_id = user if user.startswith("@") else f"@{user}:{self.api.server_name}"
+        localpart, separator, server_name = user_id[1:].partition(":")
+        if (
+            not separator
+            or server_name != self.api.server_name
+            or re.fullmatch(r"[0-9a-f]{64}", localpart) is None
+        ):
+            logger.warning("event=AUTH_FAIL reason=invalid_user")
+            return None
+
+        password = login_dict.get("password")
+        if not isinstance(password, str):
+            logger.warning(
+                "event=AUTH_FAIL user=%s reason=malformed_credentials", user_id
+            )
+            return None
+        parts = password.split(":")
+        if len(parts) != 3 or parts[0] != "ed":
+            logger.warning(
+                "event=AUTH_FAIL user=%s reason=malformed_credentials", user_id
+            )
+            return None
         try:
-            public_key_hash = bytes.fromhex(user_id.split(":", 1)[0][1:])
-            signature = bytes.fromhex(password.split(":")[1])
-            public_key = bytes.fromhex(password.split(":")[2])
-            public_key_digest = nacl.hash.blake2b(
-                public_key, digest_size=32,
-                encoder=nacl.encoding.RawEncoder)
-        except (ValueError, IndexError) as exc:
-            self.log.warning(
-                "event=AUTH_FAIL user=%s reason=malformed_credentials err=%s",
-                user_id, exc)
-            defer.returnValue(False)
-            return
+            signature, public_key = bytes.fromhex(parts[1]), bytes.fromhex(parts[2])
+        except ValueError:
+            logger.warning(
+                "event=AUTH_FAIL user=%s reason=malformed_credentials", user_id
+            )
+            return None
+        if len(signature) != 64 or len(public_key) != 32:
+            logger.warning(
+                "event=AUTH_FAIL user=%s reason=malformed_credentials", user_id
+            )
+            return None
+        if hashlib.blake2b(public_key, digest_size=32).hexdigest() != localpart:
+            logger.warning("event=AUTH_FAIL user=%s reason=pubkey_mismatch", user_id)
+            return None
 
-        if public_key_hash.hex() != public_key_digest.hex():
-            self.log.warning(
-                "event=AUTH_FAIL user=%s reason=pubkey_mismatch", user_id)
-            defer.returnValue(False)
-            return
-
-        current_time_window = int(time.time() / (5 * 60))
-
-        # Check current, previous (-5min), and next (+5min) time windows
-        # to handle reasonable clock skew between client and server
-        verified = False
+        key = nacl.signing.VerifyKey(public_key)
+        bucket = int(time.time()) // 300
         for offset, label in ((0, "current"), (-1, "previous"), (1, "next")):
-            message_digest = nacl.hash.blake2b(
-                "login:{}".format(current_time_window + offset).encode(),
-                digest_size=32, encoder=nacl.encoding.RawEncoder)
+            digest = hashlib.blake2b(
+                f"login:{bucket + offset}".encode(), digest_size=32
+            ).digest()
             try:
-                nacl.signing.VerifyKey(public_key).verify(
-                    message_digest, signature)
+                key.verify(digest, signature)
             except nacl.exceptions.BadSignatureError:
                 continue
-            verified = True
-            self.log.info("event=AUTH_OK user=%s window=%s", user_id.lower(), label)
             break
+        else:
+            logger.warning("event=AUTH_FAIL user=%s reason=signature_invalid", user_id)
+            return None
 
-        if not verified:
-            self.log.warning(
-                "event=AUTH_FAIL user=%s reason=signature_invalid", user_id)
-            defer.returnValue(False)
-            return
-
-        if not (yield self.account_handler.check_user_exists(user_id)):
-            self.log.info("event=REGISTER user=%s", user_id.lower())
-            try:
-                yield self.account_handler.register(localpart=public_key_digest.hex())
-            except Exception as exc:
-                # Handle race: concurrent first-login may have registered already
-                if (yield self.account_handler.check_user_exists(user_id)):
-                    self.log.info("event=REGISTER_RACE user=%s (already registered)", user_id.lower())
+        try:
+            if await self.api.check_user_exists(user_id) is None:
+                try:
+                    await self.api.register_user(localpart=localpart)
+                except Exception:
+                    # Another first login may have registered the same account.
+                    if await self.api.check_user_exists(user_id) is None:
+                        raise
+                    logger.info("event=REGISTER_RACE user=%s", user_id)
                 else:
-                    raise exc
+                    logger.info("event=REGISTER user=%s", user_id)
+        except Exception:
+            # Backend exceptions may contain request data; log only the outcome.
+            logger.warning("event=AUTH_FAIL user=%s reason=account_backend", user_id)
+            return None
 
-        defer.returnValue(True)
+        logger.info("event=AUTH_OK user=%s window=%s", user_id, label)
+        return user_id, None
 
     @staticmethod
-    def parse_config(config):
+    def parse_config(config: Mapping[str, object]) -> Mapping[str, object]:
         return config

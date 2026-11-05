@@ -1,0 +1,30 @@
+[project]
+name = "beacon-synapse-module-tests"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2,<10",
+    "PyNaCl>=1.6.2,<2",
+    "ty>=0.0.98",
+    "ruff>=0.17.4",
+    "matrix-synapse==1.164.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ty.src]
+include = ["crypto_auth_provider.py", "tests"]
+
+[tool.ty.rules]
+all = "error"
+
+[tool.ruff]
+include = ["crypto_auth_provider.py", "tests/**/*.py", "pyproject.toml"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]

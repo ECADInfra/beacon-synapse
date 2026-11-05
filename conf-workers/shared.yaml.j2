@@ -1,7 +1,11 @@
 # This file contains the base for the shared homeserver config file between Synapse workers,
-# as part of ./Dockerfile-workers.
+# as part of ./Dockerfile.
 # configure_workers_and_start.py uses and amends to this file depending on the workers
 # that have been selected.
+
+# Every process also loads homeserver.yaml. Keep modules (including auth and
+# known_servers), password_config, allow_public_rooms_over_federation and
+# rc_message/rc_login/rc_invites/rc_federation there so both modes share policy.
 
 {% if enable_redis %}
 redis:

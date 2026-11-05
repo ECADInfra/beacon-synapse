@@ -16,7 +16,31 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: '3.13'
+          enable-cache: true
+      - name: Install development environment
+        run: uv sync --locked
+      - name: Check types
+        run: uv run --locked ty check
+      - name: Lint
+        run: uv run --locked ruff check
+      - name: Check formatting
+        run: uv run --locked ruff format --check
+      - name: Test authentication
+        run: uv run --locked pytest -q
+
   build:
+    needs: checks
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,13 +48,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4.4.1
 
       - name: Log in to Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4.8.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -38,7 +62,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           annotations: |
@@ -50,7 +74,7 @@ jobs:
             type=ref,event=branch
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           push: true

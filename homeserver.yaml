@@ -9,7 +9,6 @@ public_baseurl: "${PUBLIC_BASEURL}"
 
 ## Federation ##
 # federation_domain_whitelist:
-#   - matrix.papers.tech
 #   - beacon.tztip.me
 
 federation_ip_range_blacklist:
@@ -76,6 +75,18 @@ rc_login:
     per_second: 1
     burst_count: 10
 
+# Bound invite bursts while allowing routine pairing and reconnects.
+rc_invites:
+  per_room:
+    per_second: 0.3
+    burst_count: 10
+  per_user:
+    per_second: 0.003
+    burst_count: 5
+  per_issuer:
+    per_second: 0.1
+    burst_count: 5
+
 rc_federation:
   window_size: 1000
   sleep_limit: 50
@@ -92,13 +103,10 @@ signing_key_path: "/config/signing.key"
 
 trusted_key_servers: []
 
+# Enable the signature module login flow without local password authentication.
 password_config:
-  enabled: false
-
-password_providers:
-    - module: "crypto_auth_provider.CryptoAuthProvider"
-      config:
-        enabled: true
+  enabled: true
+  localdb_enabled: false
 
 # Pure p2p communication transport layer: no search, profiles, media, or registration
 enable_group_creation: false
@@ -109,7 +117,7 @@ enable_registration: false
 use_presence: false
 require_auth_for_profile_requests: true
 allow_public_rooms_without_auth: false
-allow_public_rooms_over_federation: true
+allow_public_rooms_over_federation: false
 enable_search: false
 allow_per_room_profiles: false
 redaction_retention_period: 1d
@@ -134,24 +142,18 @@ event_cache_size: 100K
 registration_shared_secret: "${REGISTRATION_SHARED_SECRET}"
 
 modules:
+  - module: crypto_auth_provider.CryptoAuthProvider
+    config: {}
   - module: beacon_info_module.BeaconInfoModule
     config:
       known_servers:
-        - "beacon-node-1.diamond.papers.tech"
-        - "beacon-node-1.sky.papers.tech"
-        - "beacon-node-2.sky.papers.tech"
-        - "beacon-node-1.hope.papers.tech"
-        - "beacon-node-1.hope-2.papers.tech"
-        - "beacon-node-1.hope-3.papers.tech"
-        - "beacon-node-1.hope-4.papers.tech"
-        - "beacon-node-1.hope-5.papers.tech"
-        - "beacon-node-1.beacon-server-1.papers.tech"
-        - "beacon-node-1.beacon-server-2.papers.tech"
-        - "beacon-node-1.beacon-server-3.papers.tech"
-        - "beacon-node-1.beacon-server-4.papers.tech"
-        - "beacon-1.ecadinfra.com"
-        - "beacon-2.ecadinfra.com"
-        - "beacon-3.ecadinfra.com"
-        - "beacon-4.ecadinfra.com"
+        - "beacon-node-1.octez.io"
+        - "beacon-node-2.octez.io"
+        - "beacon-node-3.octez.io"
+        - "beacon-node-4.octez.io"
+        - "beacon-node-5.octez.io"
+        - "beacon-node-6.octez.io"
+        - "beacon-node-7.octez.io"
+        - "beacon-node-8.octez.io"
   - module: beacon_monitor_module.BeaconMonitorModule
     config: {}
